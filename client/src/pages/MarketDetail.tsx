@@ -36,9 +36,9 @@ export default function MarketDetail() {
   );
 
   // Fetch news
-  const { data: news = [] } = trpc.news.getMarketNews.useQuery(
-    { marketId: marketId || 0, limit: 10 },
-    { enabled: !!marketId }
+  const { data: news = [] } = trpc.news.getNews.useQuery(
+    { query: market?.title, limit: 10 },
+    { enabled: !!market }
   );
 
   // Fetch user portfolio
@@ -54,16 +54,6 @@ export default function MarketDetail() {
     },
     onError: (error) => {
       toast.error(error.message || "Failed to place bet");
-    },
-  });
-
-  // Create comment mutation
-  const createCommentMutation = trpc.comments.create.useMutation({
-    onSuccess: () => {
-      toast.success("Comment posted!");
-    },
-    onError: (error) => {
-      toast.error(error.message || "Failed to post comment");
     },
   });
 
@@ -212,7 +202,7 @@ export default function MarketDetail() {
                 {comments.length === 0 ? (
                   <p className="text-muted-foreground">No comments yet</p>
                 ) : (
-                  comments.map((comment) => (
+                  comments.map((comment: any) => (
                     <div key={comment.id} className="border-b border-border pb-4 last:border-b-0">
                       <div className="flex justify-between items-start mb-2">
                         <span className="font-medium text-sm">User #{comment.userId}</span>
@@ -319,24 +309,29 @@ export default function MarketDetail() {
             </div>
 
             {/* News Section */}
-            {news.length > 0 && (
+            {news && news.length > 0 && (
               <div className="bg-card border border-border rounded-lg p-6 mt-6">
                 <h3 className="font-semibold mb-4">Related News</h3>
                 <div className="space-y-3">
-                  {news.map((article) => (
-                    <a
-                      key={article.id}
-                      href={article.url || "#"}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="block text-sm hover:text-accent transition-colors"
-                    >
-                      <div className="font-medium line-clamp-2">{article.title}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {article.source}
-                      </div>
-                    </a>
-                  ))}
+                  {news.map((article: any) => {
+                    const newsKey = article.id || article.title;
+                    const newsUrl = article.url || "#";
+                    const newsTitle = article.title || "News";
+                    const newsSource = article.source?.name || "News";
+                    
+                    return (
+                      <a
+                        key={newsKey}
+                        href={newsUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block text-sm hover:text-accent transition-colors"
+                      >
+                        <div className="font-medium line-clamp-2">{newsTitle}</div>
+                        <div className="text-xs text-muted-foreground">{newsSource}</div>
+                      </a>
+                    );
+                  })}
                 </div>
               </div>
             )}

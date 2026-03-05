@@ -54,3 +54,31 @@
 - [x] Optimisation responsive (mobile, tablet, desktop)
 - [ ] Vérification des performances
 - [ ] Déploiement et checkpoint final
+
+
+## Phase 9: Intégration des Données Réelles
+
+### APIs Externes
+- [ ] Intégration NewsAPI pour les actualités (économie, politique, sports)
+- [ ] Intégration CoinGecko API pour les données crypto
+- [ ] Intégration Alpha Vantage ou Yahoo Finance pour les indices boursiers
+- [ ] Intégration ESPN API pour les données sportives
+- [ ] Intégration OpenWeather pour les données climatiques
+
+### Marchés Dynamiques
+- [ ] Création automatique de marchés basés sur les actualités
+- [ ] Mise à jour des cotes en temps réel basée sur les données
+- [ ] Système de catégorisation automatique des marchés
+- [ ] Historique des prix mis à jour automatiquement
+
+### Système de Notifications
+- [ ] Notifications quand les cotes changent significativement
+- [ ] Alertes pour les actualités pertinentes
+- [ ] Notifications de résolution de marchés
+- [ ] Rappels pour les marchés proches de la fermeture
+
+### Améliorations UI/UX
+- [ ] Affichage des sources d'actualités
+- [ ] Graphiques en temps réel
+- [ ] Indicateurs de volatilité
+- [ ] Sentiment analysis sur les actualités

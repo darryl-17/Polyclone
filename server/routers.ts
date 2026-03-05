@@ -2,6 +2,8 @@ import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
+import { newsRouter } from "./routers/news";
+import { marketDataRouter } from "./routers/marketData";
 import { z } from "zod";
 import {
   getMarkets,
@@ -34,6 +36,8 @@ import {
 
 export const appRouter = router({
   system: systemRouter,
+  news: newsRouter,
+  marketData: marketDataRouter,
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
     logout: publicProcedure.mutation(({ ctx }) => {
@@ -257,46 +261,7 @@ export const appRouter = router({
       }),
   }),
 
-  // ===== NEWS =====
-  news: router({
-    getMarketNews: publicProcedure
-      .input(
-        z.object({
-          marketId: z.number(),
-          limit: z.number().default(10),
-        })
-      )
-      .query(async ({ input }) => {
-        return await getMarketNews(input.marketId, input.limit);
-      }),
 
-    create: protectedProcedure
-      .input(
-        z.object({
-          marketId: z.number(),
-          title: z.string(),
-          source: z.string().optional(),
-          url: z.string().optional(),
-          imageUrl: z.string().optional(),
-          summary: z.string().optional(),
-          publishedAt: z.date().optional(),
-        })
-      )
-      .mutation(async ({ input, ctx }) => {
-        if (ctx.user?.role !== "admin") {
-          throw new Error("Only admins can create news");
-        }
-        return await createNewsArticle({
-          marketId: input.marketId,
-          title: input.title,
-          source: input.source,
-          url: input.url,
-          imageUrl: input.imageUrl,
-          summary: input.summary,
-          publishedAt: input.publishedAt,
-        });
-      }),
-  }),
 
   // ===== NOTIFICATIONS =====
   notifications: router({
