@@ -78,39 +78,46 @@
   --sidebar-ring: oklch(0.623 0.214 259.815);
 }
 
+/* Polymarket custom colors */
+:root {
+  --color-success: oklch(0.7 0.2 142.5);
+  --color-danger: oklch(0.6 0.2 25);
+  --color-primary-accent: oklch(0.6 0.2 280);
+}
+
 .dark {
   --primary: var(--color-blue-700);
   --primary-foreground: var(--color-blue-50);
   --sidebar-primary: var(--color-blue-500);
   --sidebar-primary-foreground: var(--color-blue-50);
-  --background: oklch(0.141 0.005 285.823);
-  --foreground: oklch(0.85 0.005 65);
-  --card: oklch(0.21 0.006 285.885);
-  --card-foreground: oklch(0.85 0.005 65);
-  --popover: oklch(0.21 0.006 285.885);
-  --popover-foreground: oklch(0.85 0.005 65);
-  --secondary: oklch(0.24 0.006 286.033);
-  --secondary-foreground: oklch(0.7 0.005 65);
-  --muted: oklch(0.274 0.006 286.033);
-  --muted-foreground: oklch(0.705 0.015 286.067);
-  --accent: oklch(0.274 0.006 286.033);
-  --accent-foreground:  oklch(0.92 0.005 65);
-  --destructive: oklch(0.704 0.191 22.216);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.488 0.243 264.376);
-  --chart-1: var(--color-blue-300);
-  --chart-2: var(--color-blue-500);
-  --chart-3: var(--color-blue-600);
-  --chart-4: var(--color-blue-700);
-  --chart-5: var(--color-blue-800);
-  --sidebar: oklch(0.21 0.006 285.885);
-  --sidebar-foreground: oklch(0.85 0.005 65);
-  --sidebar-accent: oklch(0.274 0.006 286.033);
-  --sidebar-accent-foreground:  oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.488 0.243 264.376);
+  --background: oklch(0.08 0.01 280);
+  --foreground: oklch(0.95 0.01 65);
+  --card: oklch(0.12 0.01 280);
+  --card-foreground: oklch(0.95 0.01 65);
+  --popover: oklch(0.12 0.01 280);
+  --popover-foreground: oklch(0.95 0.01 65);
+  --secondary: oklch(0.15 0.01 280);
+  --secondary-foreground: oklch(0.8 0.01 65);
+  --muted: oklch(0.2 0.01 280);
+  --muted-foreground: oklch(0.7 0.02 280);
+  --accent: oklch(0.6 0.2 280);
+  --accent-foreground: oklch(0.95 0.01 65);
+  --destructive: oklch(0.6 0.2 25);
+  --destructive-foreground: oklch(0.95 0.01 65);
+  --border: oklch(0.2 0.01 280);
+  --input: oklch(0.15 0.01 280);
+  --ring: oklch(0.6 0.2 280);
+  --chart-1: oklch(0.7 0.2 142.5);
+  --chart-2: oklch(0.6 0.2 25);
+  --chart-3: oklch(0.6 0.2 280);
+  --chart-4: oklch(0.5 0.15 280);
+  --chart-5: oklch(0.4 0.1 280);
+  --sidebar: oklch(0.12 0.01 280);
+  --sidebar-foreground: oklch(0.95 0.01 65);
+  --sidebar-accent: oklch(0.2 0.01 280);
+  --sidebar-accent-foreground: oklch(0.95 0.01 65);
+  --sidebar-border: oklch(0.2 0.01 280);
+  --sidebar-ring: oklch(0.6 0.2 280);
 }
 
 @layer base {
@@ -174,4 +181,66 @@
       max-width: 1280px; /* Standard content width */
     }
   }
+}
+
+/* Polymarket specific components */
+.market-card {
+  @apply bg-card border border-border rounded-lg p-4 hover:border-accent/50 transition-all hover:shadow-lg;
+}
+
+.market-title {
+  @apply text-base font-semibold text-foreground line-clamp-2;
+}
+
+.market-category {
+  @apply inline-block px-2 py-1 bg-muted text-muted-foreground text-xs rounded font-medium;
+}
+
+.probability-badge {
+  @apply inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-semibold;
+}
+
+.probability-yes {
+  @apply text-green-400;
+}
+
+.probability-no {
+  @apply text-red-400;
+}
+
+.nav-link {
+  @apply px-3 py-2 rounded-md text-sm font-medium transition-colors hover:bg-muted;
+}
+
+.nav-link-active {
+  @apply bg-accent text-accent-foreground;
+}
+
+.filter-button {
+  @apply px-4 py-2 rounded-full border border-border text-sm font-medium transition-colors hover:border-accent hover:text-accent;
+}
+
+.filter-button-active {
+  @apply bg-accent text-accent-foreground border-accent;
+}
+
+.search-input {
+  @apply w-full px-4 py-2 bg-input border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent;
+}
+
+/* Smooth scrollbar */
+::-webkit-scrollbar {
+  @apply w-2 h-2;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-background;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-muted rounded hover:bg-muted-foreground;
+}
+
+html {
+  scroll-behavior: smooth;
 }
