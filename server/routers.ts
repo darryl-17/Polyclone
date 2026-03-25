@@ -17,7 +17,6 @@ import {
   getOrCreatePortfolio,
   updatePortfolioBalance,
   updatePortfolioStats,
-  getMarketComments,
   createComment,
   getMarketNews,
   createNewsArticle,
@@ -32,6 +31,15 @@ import {
   createAIPrediction,
   getMarketAIPrediction,
   getLeaderboard,
+  executeSellTrade,
+  resolveMarketAndSettle,
+  addDemoDeposit,
+  getWatchlistMarketIds,
+  addToWatchlist,
+  removeFromWatchlist,
+  getMarketCommentsWithUsers,
+  getUserPositions,
+  getMarketPositionsSummary,
 } from "./db";
 
 export const appRouter = router({
@@ -58,10 +66,15 @@ export const appRouter = router({
           search: z.string().optional(),
           limit: z.number().default(20),
           offset: z.number().default(0),
+          sort: z.enum(["new", "trending", "ending", "volume24h"]).optional(),
+          liveOnly: z.boolean().optional(),
         })
       )
       .query(async ({ input }) => {
-        return await getMarkets(input.category, input.search, input.limit, input.offset);
+        return await getMarkets(input.category, input.search, input.limit, input.offset, {
+          sort: input.sort,
+          liveOnly: input.liveOnly,
+        });
       }),
 
     getById: publicProcedure
@@ -138,6 +151,26 @@ export const appRouter = router({
         });
         return { success: true };
       }),
+
+    resolve: protectedProcedure
+      .input(
+        z.object({
+          marketId: z.number(),
+          resolution: z.enum(["yes", "no", "invalid"]),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        if (ctx.user?.role !== "admin") {
+          throw new Error("Only admins can resolve markets");
+        }
+        return await resolveMarketAndSettle(input.marketId, input.resolution);
+      }),
+
+    getPositions: publicProcedure
+      .input(z.number())
+      .query(async ({ input }) => {
+        return await getMarketPositionsSummary(input);
+      }),
   }),
 
   // ===== BETS =====
@@ -152,28 +185,30 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ input, ctx }) => {
-        const portfolio = await getOrCreatePortfolio(ctx.user!.id);
-        
-        // Check if user has sufficient balance
-        const balance = parseFloat(portfolio.balance || "0");
-        if (balance < input.amount) {
-          throw new Error("Insufficient balance");
-        }
-
-        // Place the bet
-        const result = await placeBet({
+        return await placeBet({
           userId: ctx.user!.id,
           marketId: input.marketId,
           outcome: input.outcome,
           amount: input.amount,
           priceAtBet: input.priceAtBet,
         });
+      }),
 
-        // Update portfolio balance
-        const newBalance = Math.max(0, balance - input.amount);
-        await updatePortfolioBalance(ctx.user!.id, newBalance);
-
-        return result;
+    sell: protectedProcedure
+      .input(
+        z.object({
+          marketId: z.number(),
+          outcome: z.enum(["yes", "no"]),
+          shares: z.number().positive(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        return await executeSellTrade({
+          userId: ctx.user!.id,
+          marketId: input.marketId,
+          outcome: input.outcome,
+          shares: input.shares,
+        });
       }),
 
     getUserBets: protectedProcedure
@@ -210,6 +245,16 @@ export const appRouter = router({
       return await getOrCreatePortfolio(ctx.user!.id);
     }),
 
+    depositDemo: protectedProcedure
+      .input(z.number().positive().max(1_000_000))
+      .mutation(async ({ input, ctx }) => {
+        return await addDemoDeposit(ctx.user!.id, input);
+      }),
+
+    positions: protectedProcedure.query(async ({ ctx }) => {
+      return await getUserPositions(ctx.user!.id);
+    }),
+
     updateBalance: protectedProcedure
       .input(z.number())
       .mutation(async ({ input, ctx }) => {
@@ -240,7 +285,7 @@ export const appRouter = router({
         })
       )
       .query(async ({ input }) => {
-        return await getMarketComments(input.marketId, input.limit);
+        return await getMarketCommentsWithUsers(input.marketId, input.limit);
       }),
 
     create: protectedProcedure
@@ -380,6 +425,24 @@ export const appRouter = router({
       .input(z.number().default(50))
       .query(async ({ input }) => {
         return await getLeaderboard(input);
+      }),
+  }),
+
+  watchlist: router({
+    ids: protectedProcedure.query(async ({ ctx }) => {
+      return await getWatchlistMarketIds(ctx.user!.id);
+    }),
+
+    add: protectedProcedure
+      .input(z.number())
+      .mutation(async ({ input, ctx }) => {
+        return await addToWatchlist(ctx.user!.id, input);
+      }),
+
+    remove: protectedProcedure
+      .input(z.number())
+      .mutation(async ({ input, ctx }) => {
+        return await removeFromWatchlist(ctx.user!.id, input);
       }),
   }),
 });

@@ -1,4 +1,4 @@
-import { eq, desc, and, like, gte, lte, inArray } from "drizzle-orm";
+import { eq, desc, asc, and, like, gte, lte, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { 
   InsertUser, 
@@ -12,6 +12,10 @@ import {
   notifications,
   stripeTransactions,
   aiPredictions,
+  trades,
+  positions,
+  watchlists,
+  users,
   type Market,
   type Bet,
   type Portfolio,
@@ -22,7 +26,15 @@ import {
   type StripeTransaction,
   type AIPrediction,
 } from "../drizzle/schema";
-import { ENV } from './_core/env';
+import { ENV } from "./_core/env";
+import {
+  applyBuyImpact,
+  applySellImpact,
+  parseCents,
+  proceedsFromSellShares,
+  sanitizeSearchTerm,
+  sharesFromBuyUsd,
+} from "./services/predictionMarket";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -109,11 +121,17 @@ export async function getUserByOpenId(openId: string) {
 }
 
 // ===== MARKETS =====
+export type MarketSort = "new" | "trending" | "ending" | "volume24h";
+
 export async function getMarkets(
   category?: string,
   search?: string,
   limit: number = 20,
-  offset: number = 0
+  offset: number = 0,
+  options?: {
+    sort?: MarketSort;
+    liveOnly?: boolean;
+  }
 ) {
   const db = await getDb();
   if (!db) return [];
@@ -123,21 +141,38 @@ export async function getMarkets(
     conditions.push(eq(markets.category, category));
   }
   if (search) {
-    conditions.push(like(markets.title, `%${search}%`));
+    const safe = sanitizeSearchTerm(search);
+    if (safe.length > 0) {
+      conditions.push(like(markets.title, `%${safe}%`));
+    }
+  }
+  if (options?.liveOnly !== false) {
+    conditions.push(isNull(markets.resolvedAt));
   }
 
-  if (conditions.length > 0) {
-    return await db.select().from(markets)
-      .where(and(...conditions))
-      .orderBy(desc(markets.createdAt))
+  const whereClause =
+    conditions.length > 0 ? and(...conditions) : undefined;
+  const sort = options?.sort ?? "new";
+
+  const orderBy =
+    sort === "trending"
+      ? [desc(markets.totalVolume), desc(markets.createdAt)]
+      : sort === "volume24h"
+        ? [desc(markets.volume24h), desc(markets.createdAt)]
+        : sort === "ending"
+          ? [asc(markets.endsAt)]
+          : [desc(markets.createdAt)];
+
+  const q = db.select().from(markets);
+  if (whereClause) {
+    return await q
+      .where(whereClause)
+      .orderBy(...orderBy)
       .limit(limit)
       .offset(offset);
   }
 
-  return await db.select().from(markets)
-    .orderBy(desc(markets.createdAt))
-    .limit(limit)
-    .offset(offset);
+  return await q.orderBy(...orderBy).limit(limit).offset(offset);
 }
 
 export async function getMarketById(id: number): Promise<Market | undefined> {
@@ -182,7 +217,148 @@ export async function updateMarketPrice(
     .where(eq(markets.id, marketId));
 }
 
-// ===== BETS =====
+// ===== BETS / TRADES =====
+async function upsertPositionAfterBuy(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  userId: number,
+  marketId: number,
+  outcome: "yes" | "no",
+  addShares: number,
+  priceCents: number
+): Promise<void> {
+  const existing = await db
+    .select()
+    .from(positions)
+    .where(
+      and(
+        eq(positions.userId, userId),
+        eq(positions.marketId, marketId),
+        eq(positions.outcome, outcome)
+      )
+    )
+    .limit(1);
+
+  if (existing.length === 0) {
+    await db.insert(positions).values({
+      userId,
+      marketId,
+      outcome,
+      shares: addShares.toFixed(8),
+      avgPriceCents: priceCents.toFixed(4),
+    });
+    return;
+  }
+
+  const row = existing[0]!;
+  const oldShares = parseFloat(String(row.shares));
+  const oldAvg = parseFloat(String(row.avgPriceCents));
+  const newShares = oldShares + addShares;
+  const newAvg =
+    newShares === 0
+      ? priceCents
+      : (oldShares * oldAvg + addShares * priceCents) / newShares;
+
+  await db
+    .update(positions)
+    .set({
+      shares: newShares.toFixed(8),
+      avgPriceCents: newAvg.toFixed(4),
+      updatedAt: new Date(),
+    })
+    .where(eq(positions.id, row.id));
+}
+
+export async function executeBuyTrade(data: {
+  userId: number;
+  marketId: number;
+  outcome: "yes" | "no";
+  amountUsd: number;
+}): Promise<{
+  yesPrice: number;
+  noPrice: number;
+  shares: number;
+}> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  if (data.amountUsd <= 0) {
+    throw new Error("Amount must be positive");
+  }
+
+  const marketRows = await db
+    .select()
+    .from(markets)
+    .where(eq(markets.id, data.marketId))
+    .limit(1);
+  const market = marketRows[0];
+  if (!market) throw new Error("Market not found");
+  if (market.resolvedAt) throw new Error("Market is resolved");
+
+  const portfolio = await getOrCreatePortfolio(data.userId);
+  const balance = parseFloat(portfolio.balance || "0");
+  if (balance < data.amountUsd) throw new Error("Insufficient balance");
+
+  const yesCents = parseCents(market.yesPrice);
+  const noCents = parseCents(market.noPrice);
+  const fillPrice = data.outcome === "yes" ? yesCents : noCents;
+  const shares = sharesFromBuyUsd(data.amountUsd, fillPrice);
+  const impact = applyBuyImpact(yesCents, data.outcome, data.amountUsd);
+
+  const newTotalVol = parseFloat(market.totalVolume || "0") + data.amountUsd;
+  const newVol24 = parseFloat(market.volume24h || "0") + data.amountUsd;
+
+  await db
+    .update(markets)
+    .set({
+      yesPrice: impact.yes.toFixed(2),
+      noPrice: impact.no.toFixed(2),
+      totalVolume: newTotalVol.toFixed(2),
+      volume24h: newVol24.toFixed(2),
+      updatedAt: new Date(),
+    })
+    .where(eq(markets.id, data.marketId));
+
+  await db.insert(trades).values({
+    userId: data.userId,
+    marketId: data.marketId,
+    outcome: data.outcome,
+    side: "buy",
+    shares: shares.toFixed(8),
+    priceCents: fillPrice.toFixed(2),
+    notionalUsd: data.amountUsd.toFixed(2),
+  });
+
+  await upsertPositionAfterBuy(
+    db,
+    data.userId,
+    data.marketId,
+    data.outcome,
+    shares,
+    fillPrice
+  );
+
+  const newBalance = balance - data.amountUsd;
+  const newInvested =
+    parseFloat(portfolio.totalInvested || "0") + data.amountUsd;
+  await db
+    .update(portfolios)
+    .set({
+      balance: newBalance.toFixed(2),
+      totalInvested: newInvested.toFixed(2),
+      updatedAt: new Date(),
+    })
+    .where(eq(portfolios.userId, data.userId));
+
+  await recordPriceHistory({
+    marketId: data.marketId,
+    yesPrice: impact.yes,
+    noPrice: impact.no,
+    volume: newVol24,
+  });
+
+  return { yesPrice: impact.yes, noPrice: impact.no, shares };
+}
+
 export async function placeBet(data: {
   userId: number;
   marketId: number;
@@ -190,26 +366,140 @@ export async function placeBet(data: {
   amount: number;
   priceAtBet: number;
 }) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  const result = await db.insert(bets).values({
+  return executeBuyTrade({
     userId: data.userId,
     marketId: data.marketId,
     outcome: data.outcome,
-    amount: data.amount.toString(),
-    priceAtBet: data.priceAtBet.toString(),
+    amountUsd: data.amount,
   });
-  return result;
+}
+
+export async function executeSellTrade(data: {
+  userId: number;
+  marketId: number;
+  outcome: "yes" | "no";
+  shares: number;
+}): Promise<{
+  proceeds: number;
+  yesPrice: number;
+  noPrice: number;
+}> {
+  if (data.shares <= 0) throw new Error("Shares must be positive");
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const marketRows = await db
+    .select()
+    .from(markets)
+    .where(eq(markets.id, data.marketId))
+    .limit(1);
+  const market = marketRows[0];
+  if (!market) throw new Error("Market not found");
+  if (market.resolvedAt) throw new Error("Market is resolved");
+
+  const posRows = await db
+    .select()
+    .from(positions)
+    .where(
+      and(
+        eq(positions.userId, data.userId),
+        eq(positions.marketId, data.marketId),
+        eq(positions.outcome, data.outcome)
+      )
+    )
+    .limit(1);
+
+  if (posRows.length === 0) throw new Error("No position to sell");
+
+  const pos = posRows[0]!;
+  const held = parseFloat(String(pos.shares));
+  if (held + 1e-9 < data.shares) throw new Error("Insufficient shares");
+
+  const yesCents = parseCents(market.yesPrice);
+  const noCents = parseCents(market.noPrice);
+  const fillPrice = data.outcome === "yes" ? yesCents : noCents;
+  const proceeds = proceedsFromSellShares(data.shares, fillPrice);
+  const impact = applySellImpact(yesCents, data.outcome, proceeds);
+
+  const newTotalVol = parseFloat(market.totalVolume || "0") + proceeds;
+  const newVol24 = parseFloat(market.volume24h || "0") + proceeds;
+
+  await db
+    .update(markets)
+    .set({
+      yesPrice: impact.yes.toFixed(2),
+      noPrice: impact.no.toFixed(2),
+      totalVolume: newTotalVol.toFixed(2),
+      volume24h: newVol24.toFixed(2),
+      updatedAt: new Date(),
+    })
+    .where(eq(markets.id, data.marketId));
+
+  await db.insert(trades).values({
+    userId: data.userId,
+    marketId: data.marketId,
+    outcome: data.outcome,
+    side: "sell",
+    shares: data.shares.toFixed(8),
+    priceCents: fillPrice.toFixed(2),
+    notionalUsd: proceeds.toFixed(2),
+  });
+
+  const newHeld = held - data.shares;
+  if (newHeld < 1e-6) {
+    await db.delete(positions).where(eq(positions.id, pos.id));
+  } else {
+    await db
+      .update(positions)
+      .set({
+        shares: newHeld.toFixed(8),
+        updatedAt: new Date(),
+      })
+      .where(eq(positions.id, pos.id));
+  }
+
+  const portfolio = await getOrCreatePortfolio(data.userId);
+  const balance = parseFloat(portfolio.balance || "0");
+  await db
+    .update(portfolios)
+    .set({
+      balance: (balance + proceeds).toFixed(2),
+      updatedAt: new Date(),
+    })
+    .where(eq(portfolios.userId, data.userId));
+
+  await recordPriceHistory({
+    marketId: data.marketId,
+    yesPrice: impact.yes,
+    noPrice: impact.no,
+    volume: newVol24,
+  });
+
+  return { proceeds, yesPrice: impact.yes, noPrice: impact.no };
 }
 
 export async function getUserBets(userId: number, limit: number = 50) {
   const db = await getDb();
   if (!db) return [];
 
-  return await db.select().from(bets)
-    .where(eq(bets.userId, userId))
-    .orderBy(desc(bets.createdAt))
+  return await db
+    .select({
+      id: trades.id,
+      userId: trades.userId,
+      marketId: trades.marketId,
+      outcome: trades.outcome,
+      amount: trades.notionalUsd,
+      priceAtBet: trades.priceCents,
+      createdAt: trades.createdAt,
+      side: trades.side,
+      shares: trades.shares,
+      settledAt: markets.resolvedAt,
+      marketTitle: markets.title,
+    })
+    .from(trades)
+    .leftJoin(markets, eq(trades.marketId, markets.id))
+    .where(eq(trades.userId, userId))
+    .orderBy(desc(trades.createdAt))
     .limit(limit);
 }
 
@@ -217,8 +507,294 @@ export async function getMarketBets(marketId: number) {
   const db = await getDb();
   if (!db) return [];
 
-  return await db.select().from(bets)
-    .where(eq(bets.marketId, marketId));
+  return await db
+    .select({
+      id: trades.id,
+      userId: trades.userId,
+      marketId: trades.marketId,
+      outcome: trades.outcome,
+      side: trades.side,
+      shares: trades.shares,
+      priceCents: trades.priceCents,
+      notionalUsd: trades.notionalUsd,
+      createdAt: trades.createdAt,
+      userName: users.name,
+    })
+    .from(trades)
+    .innerJoin(users, eq(trades.userId, users.id))
+    .where(eq(trades.marketId, marketId))
+    .orderBy(desc(trades.createdAt))
+    .limit(200);
+}
+
+export async function getMarketPositionsSummary(marketId: number) {
+  const db = await getDb();
+  if (!db) return [];
+
+  const rows = await db
+    .select({
+      outcome: positions.outcome,
+      shares: positions.shares,
+      userId: positions.userId,
+      userName: users.name,
+    })
+    .from(positions)
+    .innerJoin(users, eq(positions.userId, users.id))
+    .where(eq(positions.marketId, marketId));
+
+  return rows;
+}
+
+export async function getUserPositions(userId: number, limit = 100) {
+  const db = await getDb();
+  if (!db) return [];
+
+  return await db
+    .select({
+      id: positions.id,
+      marketId: positions.marketId,
+      outcome: positions.outcome,
+      shares: positions.shares,
+      avgPriceCents: positions.avgPriceCents,
+      title: markets.title,
+      yesPrice: markets.yesPrice,
+      noPrice: markets.noPrice,
+      resolvedAt: markets.resolvedAt,
+    })
+    .from(positions)
+    .innerJoin(markets, eq(positions.marketId, markets.id))
+    .where(eq(positions.userId, userId))
+    .orderBy(desc(positions.updatedAt))
+    .limit(limit);
+}
+
+export async function resolveMarketAndSettle(
+  marketId: number,
+  resolution: "yes" | "no" | "invalid"
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const marketRows = await db
+    .select()
+    .from(markets)
+    .where(eq(markets.id, marketId))
+    .limit(1);
+  if (marketRows.length === 0) throw new Error("Market not found");
+  const m = marketRows[0]!;
+  if (m.resolvedAt) throw new Error("Already resolved");
+
+  await db
+    .update(markets)
+    .set({
+      resolution,
+      resolvedAt: new Date(),
+      isLive: false,
+      updatedAt: new Date(),
+    })
+    .where(eq(markets.id, marketId));
+
+  const allPositions = await db
+    .select()
+    .from(positions)
+    .where(eq(positions.marketId, marketId));
+
+  for (const pos of allPositions) {
+    const shares = parseFloat(String(pos.shares));
+    const avg = parseFloat(String(pos.avgPriceCents));
+    const cost = shares * (avg / 100);
+
+    let payout = 0;
+    if (resolution === "invalid") {
+      payout = cost;
+    } else if (resolution === "yes" && pos.outcome === "yes") {
+      payout = shares;
+    } else if (resolution === "no" && pos.outcome === "no") {
+      payout = shares;
+    }
+
+    const p = await getOrCreatePortfolio(pos.userId);
+    const bal = parseFloat(p.balance || "0");
+    const ret = parseFloat(p.totalReturns || "0") + (payout - cost);
+
+    await db
+      .update(portfolios)
+      .set({
+        balance: (bal + payout).toFixed(2),
+        totalReturns: ret.toFixed(2),
+        updatedAt: new Date(),
+      })
+      .where(eq(portfolios.userId, pos.userId));
+
+    await db.delete(positions).where(eq(positions.id, pos.id));
+
+    await createNotification({
+      userId: pos.userId,
+      marketId,
+      type: "market_resolved",
+      title: "Market resolved",
+      message: `Outcome: ${resolution}`,
+    });
+  }
+
+  const legacyBets = await db
+    .select()
+    .from(bets)
+    .where(and(eq(bets.marketId, marketId), isNull(bets.settledAt)));
+
+  for (const bet of legacyBets) {
+    const amount = parseFloat(String(bet.amount));
+    const price = parseFloat(String(bet.priceAtBet));
+    const bShares = amount / (price / 100);
+    let payout = 0;
+    if (resolution === "invalid") {
+      payout = amount;
+    } else if (
+      (resolution === "yes" && bet.outcome === "yes") ||
+      (resolution === "no" && bet.outcome === "no")
+    ) {
+      payout = bShares;
+    }
+    const cost = amount;
+    const p = await getOrCreatePortfolio(bet.userId);
+    const bal = parseFloat(p.balance || "0");
+    const ret = parseFloat(p.totalReturns || "0") + (payout - cost);
+
+    await db
+      .update(portfolios)
+      .set({
+        balance: (bal + payout).toFixed(2),
+        totalReturns: ret.toFixed(2),
+        updatedAt: new Date(),
+      })
+      .where(eq(portfolios.userId, bet.userId));
+
+    await db
+      .update(bets)
+      .set({
+        settledAt: new Date(),
+        payout: payout.toFixed(2),
+        updatedAt: new Date(),
+      } as any)
+      .where(eq(bets.id, bet.id));
+
+    await createNotification({
+      userId: bet.userId,
+      marketId,
+      type: "market_resolved",
+      title: "Market resolved",
+      message: "Your position on this market settled.",
+    });
+  }
+
+  return { success: true as const };
+}
+
+export async function addDemoDeposit(userId: number, amount: number) {
+  if (amount <= 0 || amount > 1_000_000) {
+    throw new Error("Invalid demo deposit amount");
+  }
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const p = await getOrCreatePortfolio(userId);
+  const bal = parseFloat(p.balance || "0");
+  await db
+    .update(portfolios)
+    .set({
+      balance: (bal + amount).toFixed(2),
+      updatedAt: new Date(),
+    })
+    .where(eq(portfolios.userId, userId));
+
+  await createStripeTransaction({
+    userId,
+    type: "deposit",
+    amount,
+    status: "completed",
+  });
+
+  await createNotification({
+    userId,
+    type: "deposit_confirmed",
+    title: "Deposit credited (demo)",
+    message: `+$${amount.toFixed(2)} added for paper trading.`,
+  });
+
+  return { success: true as const, balance: bal + amount };
+}
+
+export async function getWatchlistMarketIds(userId: number): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+
+  const rows = await db
+    .select({ marketId: watchlists.marketId })
+    .from(watchlists)
+    .where(eq(watchlists.userId, userId));
+
+  return rows.map((r) => r.marketId);
+}
+
+export async function addToWatchlist(userId: number, marketId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const m = await getMarketById(marketId);
+  if (!m) throw new Error("Market not found");
+
+  const existing = await db
+    .select()
+    .from(watchlists)
+    .where(
+      and(
+        eq(watchlists.userId, userId),
+        eq(watchlists.marketId, marketId)
+      )
+    )
+    .limit(1);
+
+  if (existing.length === 0) {
+    await db.insert(watchlists).values({ userId, marketId });
+  }
+
+  return { success: true as const };
+}
+
+export async function removeFromWatchlist(userId: number, marketId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  await db
+    .delete(watchlists)
+    .where(
+      and(eq(watchlists.userId, userId), eq(watchlists.marketId, marketId))
+    );
+
+  return { success: true as const };
+}
+
+export async function getMarketCommentsWithUsers(
+  marketId: number,
+  limit: number = 50
+) {
+  const db = await getDb();
+  if (!db) return [];
+
+  return await db
+    .select({
+      id: comments.id,
+      content: comments.content,
+      createdAt: comments.createdAt,
+      userId: comments.userId,
+      userName: users.name,
+      userAvatar: users.avatar,
+    })
+    .from(comments)
+    .innerJoin(users, eq(comments.userId, users.id))
+    .where(eq(comments.marketId, marketId))
+    .orderBy(desc(comments.createdAt))
+    .limit(limit);
 }
 
 export async function settleBet(betId: number, payout: number) {

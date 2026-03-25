@@ -1,3 +1,4 @@
+import { AppNav } from "@/components/AppNav";
 import { trpc } from "@/lib/trpc";
 import { Loader2, ArrowLeft, Trophy } from "lucide-react";
 import { Link } from "wouter";
@@ -15,13 +16,13 @@ export default function Leaderboard() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      {/* Header */}
+      <AppNav />
       <div className="border-b border-border">
         <div className="container py-8">
           <Link href="/">
             <a className="flex items-center gap-2 text-accent hover:underline mb-4">
               <ArrowLeft className="w-4 h-4" />
-              Back to Markets
+              Markets
             </a>
           </Link>
 

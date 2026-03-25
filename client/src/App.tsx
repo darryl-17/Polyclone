@@ -5,6 +5,7 @@ import Home from "@/pages/Home";
 import MarketDetail from "@/pages/MarketDetail";
 import Portfolio from "@/pages/Portfolio";
 import Leaderboard from "@/pages/Leaderboard";
+import HowItWorks from "@/pages/HowItWorks";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
@@ -16,6 +17,7 @@ function Router() {
       <Route path={"/market/:id"} component={MarketDetail} />
       <Route path={"/portfolio"} component={Portfolio} />
       <Route path={"/leaderboard"} component={Leaderboard} />
+      <Route path={"/how-it-works"} component={HowItWorks} />
       <Route path={"/404"} component={NotFound} />
       {/* Final fallback route */}
       <Route component={NotFound} />

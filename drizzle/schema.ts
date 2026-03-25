@@ -282,3 +282,92 @@ export const aiPredictions = mysqlTable("aiPredictions", {
 
 export type AIPrediction = typeof aiPredictions.$inferSelect;
 export type InsertAIPrediction = typeof aiPredictions.$inferInsert;
+
+/**
+ * Trades — buy/sell ledger (Polymarket-style share trades).
+ */
+export const trades = mysqlTable("trades", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  marketId: int("marketId").notNull(),
+  outcome: mysqlEnum("outcome", ["yes", "no"]).notNull(),
+  side: mysqlEnum("side", ["buy", "sell"]).notNull(),
+  /** Shares (payout tokens): cost / (price in dollars). */
+  shares: decimal("shares", { precision: 24, scale: 8 }).notNull(),
+  /** Outcome price in cents (0–100) at execution. */
+  priceCents: decimal("priceCents", { precision: 6, scale: 2 }).notNull(),
+  notionalUsd: decimal("notionalUsd", { precision: 20, scale: 2 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  userIdx: index("trades_userId_idx").on(table.userId),
+  marketIdx: index("trades_marketId_idx").on(table.marketId),
+  createdIdx: index("trades_createdAt_idx").on(table.createdAt),
+  fk_user: foreignKey({
+    columns: [table.userId],
+    foreignColumns: [users.id],
+  }),
+  fk_market: foreignKey({
+    columns: [table.marketId],
+    foreignColumns: [markets.id],
+  }),
+}));
+
+export type Trade = typeof trades.$inferSelect;
+export type InsertTrade = typeof trades.$inferInsert;
+
+/**
+ * Positions — net shares per user / market / outcome.
+ */
+export const positions = mysqlTable("positions", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  marketId: int("marketId").notNull(),
+  outcome: mysqlEnum("outcome", ["yes", "no"]).notNull(),
+  shares: decimal("positionShares", { precision: 24, scale: 8 }).notNull(),
+  avgPriceCents: decimal("avgPriceCents", { precision: 8, scale: 4 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  userIdx: index("positions_userId_idx").on(table.userId),
+  marketIdx: index("positions_marketId_idx").on(table.marketId),
+  userMarketOutcome: unique("positions_user_market_outcome").on(
+    table.userId,
+    table.marketId,
+    table.outcome
+  ),
+  fk_user: foreignKey({
+    columns: [table.userId],
+    foreignColumns: [users.id],
+  }),
+  fk_market: foreignKey({
+    columns: [table.marketId],
+    foreignColumns: [markets.id],
+  }),
+}));
+
+export type Position = typeof positions.$inferSelect;
+export type InsertPosition = typeof positions.$inferInsert;
+
+/**
+ * Watchlist — starred markets per user.
+ */
+export const watchlists = mysqlTable("watchlists", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  marketId: int("marketId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  userMarket: unique("watchlists_user_market").on(table.userId, table.marketId),
+  userIdx: index("watchlists_userId_idx").on(table.userId),
+  fk_user: foreignKey({
+    columns: [table.userId],
+    foreignColumns: [users.id],
+  }),
+  fk_market: foreignKey({
+    columns: [table.marketId],
+    foreignColumns: [markets.id],
+  }),
+}));
+
+export type Watchlist = typeof watchlists.$inferSelect;
+export type InsertWatchlist = typeof watchlists.$inferInsert;
